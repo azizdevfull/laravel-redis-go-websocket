@@ -8,23 +8,30 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::get('/ws-token', function (Request $request) {
+    $channel = $request->query('channel', 'chat');
     $userId = (string) $request->user()->id;
     $timestamp = (string) time();
-    $signature = hash_hmac('sha256', $userId.':'.$timestamp, env('WS_SECRET'));
+    $signature = hash_hmac('sha256', $userId.':'.$timestamp.':'.$channel, env('WS_SECRET'));
 
     return response()->json([
-        'token' => $userId.':'.$timestamp.':'.$signature,
-        'channel' => 'chat',
+        'token' => $userId.':'.$timestamp.':'.$channel.':'.$signature,
+        'channel' => $channel,
     ]);
 })->middleware('auth:sanctum');
 
 Route::get('/ws-token/guest', function (Request $request) {
+    $channel = $request->query('channel', 'public-chat');
+
+    if (! str_starts_with($channel, 'public-')) {
+        return response()->json(['error' => 'guests can only access public-* channels'], 403);
+    }
+
     $userId = 'guest';
     $timestamp = (string) time();
-    $signature = hash_hmac('sha256', $userId.':'.$timestamp, env('WS_SECRET'));
+    $signature = hash_hmac('sha256', $userId.':'.$timestamp.':'.$channel, env('WS_SECRET'));
 
     return response()->json([
-        'token' => $userId.':'.$timestamp.':'.$signature,
-        'channel' => 'chat',
+        'token' => $userId.':'.$timestamp.':'.$channel.':'.$signature,
+        'channel' => $channel,
     ]);
 })->middleware('throttle:60,1');

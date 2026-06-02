@@ -44,15 +44,15 @@ func wsHandler(hub *Hub) http.HandlerFunc {
 	secret := getEnv("WS_SECRET", "")
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("token")
-		if !validateToken(token, secret) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
 		channel := r.URL.Query().Get("channel")
 		if channel == "" {
 			http.Error(w, "channel required", http.StatusBadRequest)
+			return
+		}
+
+		token := r.URL.Query().Get("token")
+		if !validateToken(token, channel, secret) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 

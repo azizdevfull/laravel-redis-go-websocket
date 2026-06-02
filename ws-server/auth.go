@@ -11,14 +11,15 @@ import (
 
 const tokenTTL = 60 // seconds
 
-// validateToken checks "userId:timestamp:hmac_sha256(userId:timestamp, secret)"
-func validateToken(token, secret string) bool {
+// validateToken checks "userId:timestamp:channel:hmac_sha256(userId:timestamp:channel, secret)"
+// and verifies the token's embedded channel matches the requested channel.
+func validateToken(token, channel, secret string) bool {
 	if secret == "" {
 		return false
 	}
 
-	parts := strings.SplitN(token, ":", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(token, ":", 4)
+	if len(parts) != 4 {
 		return false
 	}
 
@@ -31,9 +32,13 @@ func validateToken(token, secret string) bool {
 		return false
 	}
 
+	if parts[2] != channel {
+		return false
+	}
+
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(parts[0] + ":" + parts[1]))
+	mac.Write([]byte(parts[0] + ":" + parts[1] + ":" + parts[2]))
 	expected := hex.EncodeToString(mac.Sum(nil))
 
-	return hmac.Equal([]byte(expected), []byte(parts[2]))
+	return hmac.Equal([]byte(expected), []byte(parts[3]))
 }

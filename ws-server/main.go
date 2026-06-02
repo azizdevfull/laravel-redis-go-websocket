@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
@@ -31,8 +37,6 @@ func isOriginAllowed(origin string) bool {
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		// Non-browser clients (e.g. Go, Node) don't send Origin — allow them.
-		// Browsers always send Origin, so we check against the allowlist.
 		if origin == "" {
 			return true
 		}
@@ -40,10 +44,18 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+var activeConns atomic.Int64
+
 func wsHandler(hub *Hub) http.HandlerFunc {
 	secret := getEnv("WS_SECRET", "")
+	maxConns, _ := strconv.ParseInt(getEnv("MAX_CONNECTIONS", "10000"), 10, 64)
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		if activeConns.Load() >= maxConns {
+			http.Error(w, "too many connections", http.StatusServiceUnavailable)
+			return
+		}
+
 		channel := r.URL.Query().Get("channel")
 		if channel == "" {
 			http.Error(w, "channel required", http.StatusBadRequest)
@@ -61,21 +73,21 @@ func wsHandler(hub *Hub) http.HandlerFunc {
 			log.Println("upgrade error:", err)
 			return
 		}
-		defer conn.Close()
 
-		hub.register(channel, conn)
-		defer hub.unregister(channel, conn)
-
-		log.Printf("+ client  channel=%s remote=%s", channel, r.RemoteAddr)
-
-		// Read loop — detects disconnect and handles ping/pong
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				break
-			}
+		client := &Client{
+			hub:     hub,
+			conn:    conn,
+			channel: channel,
+			send:    make(chan []byte, sendBufferSize),
 		}
 
-		log.Printf("- client  channel=%s remote=%s", channel, r.RemoteAddr)
+		activeConns.Add(1)
+		hub.register(client)
+
+		go client.writePump()
+		client.readPump() // blocks until disconnect
+
+		activeConns.Add(-1)
 	}
 }
 
@@ -88,15 +100,28 @@ func startRedisSubscriber(ctx context.Context, rdb *redis.Client, hub *Hub) {
 
 	log.Printf("redis subscriber ready  pattern=%s", pattern)
 
-	for msg := range pubsub.Channel() {
-		channel := strings.TrimPrefix(msg.Channel, prefix)
-		log.Printf("redis message  channel=%s len=%d", channel, len(msg.Payload))
-		hub.broadcast(channel, []byte(msg.Payload))
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-pubsub.Channel():
+			channel := strings.TrimPrefix(msg.Channel, prefix)
+			hub.broadcast(channel, []byte(msg.Payload))
+		}
+	}
+}
+
+func metricsHandler(hub *Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "ws_connections_active %d\n", activeConns.Load())
+		fmt.Fprintf(w, "ws_connections_by_channel %d\n", hub.ConnectionCount())
 	}
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	redisPassword := getEnv("REDIS_PASSWORD", "")
 	if redisPassword == "null" {
@@ -116,12 +141,29 @@ func main() {
 	hub := newHub()
 	go startRedisSubscriber(ctx, rdb, hub)
 
-	http.HandleFunc("/ws", wsHandler(hub))
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", wsHandler(hub))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/metrics", metricsHandler(hub))
 
-	addr := ":" + getEnv("PORT", "8080")
-	log.Printf("WebSocket server listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	server := &http.Server{
+		Addr:    ":" + getEnv("PORT", "8080"),
+		Handler: mux,
+	}
+
+	go func() {
+		<-ctx.Done()
+		log.Println("shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		server.Shutdown(shutdownCtx)
+	}()
+
+	log.Printf("WebSocket server listening on %s", server.Addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server error: %v", err)
+	}
+	log.Println("server stopped")
 }

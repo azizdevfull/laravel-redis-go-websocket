@@ -281,13 +281,45 @@ Go server ham xuddi shu prefixni ishlatadi — `broadcast_redis_*` patterniga su
 
 ---
 
+## v2 — Production yaxshilanishlari
+
+`v2` branch da Go server to'liq production tayyor qilindi:
+
+| | v1 | v2 |
+|---|---|---|
+| Write | Bloklaydi | Har clientga `chan []byte` buffer (256) |
+| Sekin client | Hamma kutadi | Avtomatik drop qilinadi |
+| Ping/Pong | Yo'q | 30s ping, 60s pong timeout |
+| Connection limit | Yo'q | `MAX_CONNECTIONS` env (default 10000) |
+| Graceful shutdown | Yo'q | SIGTERM → 10s ichida yopadi |
+| Metrics | Yo'q | `GET /metrics` — aktiv ulanishlar soni |
+
+### Metrics
+
+```
+GET http://localhost:8080/metrics
+```
+
+```
+ws_connections_active 42
+ws_connections_by_channel 42
+```
+
+### `MAX_CONNECTIONS` sozlash
+
+```env
+MAX_CONNECTIONS=50000
+```
+
+---
+
 ## Production uchun eslatmalar
 
-- `/ws-token` routega `->middleware('auth')` qo'shing — faqat tizimga kirgan foydalanuvchilar token olsin
 - `WS_SECRET` ni kamida 32 belgili tasodifiy qator qiling
 - `ALLOWED_ORIGINS` ni aniq domenga sozlang (hozir `http://localhost:8000`)
 - Go serverni `systemd` yoki `supervisor` orqali ishga tushiring
 - WebSocket uchun `wss://` (TLS) ishlatish tavsiya etiladi
+- Horizontal scale: bir nechta Go instance, hammasi bir Redis ga — ishlaydi
 
 ---
 

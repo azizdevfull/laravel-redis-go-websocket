@@ -1,12 +1,24 @@
 <?php
 
 use App\Events\MessageSent;
+use App\Models\User;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use League\CommonMark\CommonMarkConverter;
 
 Route::get('/', function () {
     MessageSent::dispatch('Hello, world!');
 
-    return view('welcome');
+    $markdown = file_get_contents(base_path('README.md'));
+    $converter = new CommonMarkConverter(['html_input' => 'strip']);
+    $content = $converter->convert($markdown)->getContent();
+
+    return view('welcome', compact('content'));
+});
+Route::get('/auth', function () {
+    Auth::login(User::first()); // Log in the first user for testing purposes
+
+    return auth()->user(); // Return the authenticated user
 });
 
 // Token endpoint — add auth middleware in production: ->middleware('auth')

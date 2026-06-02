@@ -29,32 +29,36 @@ Brauzer Redis bilan to'g'ridan-to'g'ri gaplasha olmaydi — Redis o'z protokolid
 
 Har qanday odam WebSocket serveriga ulana olmasligi uchun token tizimi ishlatiladi.
 
-### Token qanday yaratiladi (Laravel)
+### Token formati
 
 ```
-token = userId + ":" + timestamp + ":" + HMAC_SHA256(userId:timestamp, WS_SECRET)
+userId:timestamp:channel:HMAC_SHA256(userId:timestamp:channel, WS_SECRET)
 
 Misol:
   userId    = 42
   timestamp = 1780378499
+  channel   = chat
   secret    = "my-strong-secret"
-  signature = HMAC_SHA256("42:1780378499", "my-strong-secret")
+  signature = HMAC_SHA256("42:1780378499:chat", "my-strong-secret")
 
-  token = "42:1780378499:dcd1ae409bed76c7..."
+  token = "42:1780378499:chat:b308f6a7..."
 ```
+
+Token **channelga bog'langan** — `chat` uchun olingan token `private-chat` ga ishlamaydi.
 
 ### Token qanday tekshiriladi (Go)
 
-1. Tokenni `:` bo'yicha 3 qismga ajratadi
-2. `timestamp` ni tekshiradi — agar 60 soniyadan eski bo'lsa → **401 Unauthorized**
-3. HMAC ni qayta hisoblaydi — agar mos kelmasa → **401 Unauthorized**
-4. Hammasi to'g'ri → WebSocket ulanishiga ruxsat
+1. Tokenni `:` bo'yicha 4 qismga ajratadi
+2. `timestamp` ni tekshiradi — 60 soniyadan eski bo'lsa → **401**
+3. Tokendagi `channel` so'ralgan channel bilan solishtiriladi — mos kelmasa → **401**
+4. HMAC ni qayta hisoblaydi — mos kelmasa → **401**
+5. Hammasi to'g'ri → WebSocket ulanishiga ruxsat
 
 ### Nima uchun oddiy parol emas?
 
-Oddiy parol (`?password=secret`) hech qachon o'zgarmaydi — birov URL ni ko'rsa yoki log fayldan o'qisa, abadiy kirish imkoni bo'ladi.
+Oddiy parol hech qachon o'zgarmaydi — birov URL ni ko'rsa, abadiy kirish imkoni bo'ladi.
 
-HMAC token esa **60 soniyada eskiradi** — birov tokenni ushlab qolsa ham foydasiz.
+HMAC token **60 soniyada eskiradi** va **faqat bitta channelga** ishlaydi.
 
 ---
 
@@ -168,18 +172,36 @@ redis subscriber ready  pattern=broadcast_redis*
 
 ---
 
+## Token endpointlari
+
+| Endpoint | Auth | Kimga | Channel cheklov |
+|---|---|---|---|
+| `GET /api/ws-token?channel=chat` | Sanctum token | Login qilgan user | Istalgan channel |
+| `GET /api/ws-token/guest?channel=public-chat` | Yo'q (60 req/min) | Ochiq sahifalar | Faqat `public-*` |
+
+Guest `public-*` dan boshqa channel so'rasa **403** qaytadi.
+
+---
+
 ## To'liq oqim (qadamma-qadam)
 
 ### 1. Brauzer token oladi
 
+**Login qilgan user:**
 ```
-GET http://localhost:8000/ws-token
+GET /api/ws-token?channel=chat
+Authorization: Bearer <sanctum-token>
 ```
 
-Laravel javobi:
+**Guest (ochiq sahifa):**
+```
+GET /api/ws-token/guest?channel=public-chat
+```
+
+Laravel javobi (ikkalasida bir xil format):
 ```json
 {
-  "token": "guest:1780378499:dcd1ae409bed76c7...",
+  "token": "42:1780378499:chat:b308f6a7...",
   "channel": "chat"
 }
 ```
@@ -187,7 +209,9 @@ Laravel javobi:
 ### 2. Brauzer WebSocket ulanishini ochadi
 
 ```javascript
-const { token, channel } = await fetch('/ws-token').then(r => r.json());
+const { token, channel } = await fetch('/api/ws-token?channel=chat', {
+    headers: { 'Authorization': 'Bearer ' + sanctumToken }
+}).then(r => r.json());
 
 const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}&channel=${channel}`);
 

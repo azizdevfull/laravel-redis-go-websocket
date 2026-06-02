@@ -20,7 +20,8 @@ class MessageSent implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new PrivateChannel('chat'),
+            new PrivateChannel('chat'), // Use PrivateChannel for authenticated users
+            // new Channel('chat'), // Use Channel for public access (no authentication)
         ];
     }
 }

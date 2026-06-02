@@ -1,37 +1,73 @@
-# Redis Broadcasting with Laravel
+# Redis Broadcasting + Go WebSocket Server
 
-Laravel orqali Redis pub/sub yordamida real-time broadcasting. Go WebSocket server ko'prik vazifasini bajaradi — Redis va brauzer orasida.
+Laravel eventi brauzerga real-time yetib borishi uchun to'liq zanjir:
+**Laravel → Redis → Go → Brauzer**
+
+---
 
 ## Arxitektura
 
 ```
-Laravel Event
-    │
-    ▼ (broadcast)
-Redis pub/sub  ←─── BROADCAST_CONNECTION=redis
-    │
-    ▼ (subscribe)
-Go WebSocket Server  ←─── siz yozasiz
-    │
-    ▼ (WebSocket)
-Brauzer (Laravel Echo)
+┌─────────────┐        ┌───────────┐        ┌────────────────┐        ┌─────────────┐
+│   Laravel   │─publish▶│   Redis   │◀─sub───│   Go Server    │─WebSocket▶│   Brauzer   │
+│  (PHP app)  │        │  pub/sub  │        │  (ws-server/)  │        │             │
+└─────────────┘        └───────────┘        └────────────────┘        └─────────────┘
+       │                                            ▲
+       │ GET /ws-token                              │ token tekshiradi
+       ◀────────────────────────────────────────────┘
 ```
 
 ### Nima uchun Go server kerak?
 
-Brauzer Redis protokolini tushunmaydi — faqat WebSocket/HTTP. Go server ikki protokol orasida ko'prik bo'lib ishlaydi: Redis kanallariga subscribe bo'ladi va brauzerga WebSocket orqali yuboradi.
+Brauzer Redis bilan to'g'ridan-to'g'ri gaplasha olmaydi — Redis o'z protokolida ishlaydi, brauzer faqat WebSocket/HTTP tushunadi. Go server ikki tomon orasida ko'prik vazifasini bajaradi:
+- Redis kanallariga subscribe bo'lib turadi
+- Ulanib turgan brauzerlarga WebSocket orqali xabar yuboradi
 
 ---
 
-## Talablar
+## Xavfsizlik: HMAC Token
+
+Har qanday odam WebSocket serveriga ulana olmasligi uchun token tizimi ishlatiladi.
+
+### Token qanday yaratiladi (Laravel)
+
+```
+token = userId + ":" + timestamp + ":" + HMAC_SHA256(userId:timestamp, WS_SECRET)
+
+Misol:
+  userId    = 42
+  timestamp = 1780378499
+  secret    = "my-strong-secret"
+  signature = HMAC_SHA256("42:1780378499", "my-strong-secret")
+
+  token = "42:1780378499:dcd1ae409bed76c7..."
+```
+
+### Token qanday tekshiriladi (Go)
+
+1. Tokenni `:` bo'yicha 3 qismga ajratadi
+2. `timestamp` ni tekshiradi — agar 60 soniyadan eski bo'lsa → **401 Unauthorized**
+3. HMAC ni qayta hisoblaydi — agar mos kelmasa → **401 Unauthorized**
+4. Hammasi to'g'ri → WebSocket ulanishiga ruxsat
+
+### Nima uchun oddiy parol emas?
+
+Oddiy parol (`?password=secret`) hech qachon o'zgarmaydi — birov URL ni ko'rsa yoki log fayldan o'qisa, abadiy kirish imkoni bo'ladi.
+
+HMAC token esa **60 soniyada eskiradi** — birov tokenni ushlab qolsa ham foydasiz.
+
+---
+
+## O'rnatish
+
+### Talablar
 
 - PHP 8.4+
 - Composer
 - Node.js & npm
-- Redis (lokal yoki remote)
+- Go 1.21+
+- Redis
 - `php8.4-redis` extension
-
-## O'rnatish
 
 ### 1. Reponi klonlash
 
@@ -59,7 +95,7 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-`.env` fayliga quyidagilarni to'g'irlang:
+`.env` ichida quyidagilarni to'g'irlang:
 
 ```env
 BROADCAST_CONNECTION=redis
@@ -68,18 +104,17 @@ REDIS_CLIENT=phpredis
 REDIS_HOST=127.0.0.1
 REDIS_PASSWORD=null
 REDIS_PORT=6379
+REDIS_PREFIX=broadcast_redis
+
+# Go server bilan umumiy sir — ikki tomonda bir xil bo'lishi shart
+WS_SECRET=your-strong-random-secret
 ```
 
 ### 5. `phpredis` extension o'rnatish
 
 ```bash
 sudo apt-get install php8.4-redis
-```
-
-Tekshirish:
-
-```bash
-php -m | grep redis
+php -m | grep redis   # "redis" chiqishi kerak
 ```
 
 ### 6. Ma'lumotlar bazasini tayyorlash
@@ -88,144 +123,147 @@ php -m | grep redis
 php artisan migrate
 ```
 
-### 7. Frontend build
+### 7. Go server dependency'larini o'rnatish
 
 ```bash
-npm run build
+cd ws-server
+cp .env.example .env
+# .env ichida WS_SECRET ni Laravel bilan bir xil qiling
+go mod download
 ```
 
 ---
 
 ## Ishga tushirish
 
-### Redis ishlaётganini tekshirish
+### 1. Redis
 
 ```bash
-redis-cli ping
-# PONG
+redis-cli ping   # PONG chiqishi kerak
 ```
 
-### Laravel serverni ishga tushirish
+### 2. Laravel
 
 ```bash
 php artisan serve
+# yoki to'liq dev muhit:
+composer run dev
 ```
 
-yoki to'liq dev muhit (server + queue + logs + vite):
+### 3. Go WebSocket server
 
 ```bash
-composer run dev
+cd ws-server
+WS_SECRET=your-strong-random-secret \
+REDIS_PREFIX=broadcast_redis \
+go run .
+```
+
+Muvaffaqiyatli ishga tushsa:
+```
+redis connected
+WebSocket server listening on :8080
+redis subscriber ready  pattern=broadcast_redis*
 ```
 
 ---
 
-## Qanday ishlaydi
+## To'liq oqim (qadamma-qadam)
 
-### Event
+### 1. Brauzer token oladi
 
-`app/Events/MessageSent.php` — `ShouldBroadcastNow` implement qiladi, ya'ni queue'siz darhol Redis ga publish bo'ladi.
+```
+GET http://localhost:8000/ws-token
+```
 
-```php
-class MessageSent implements ShouldBroadcastNow
+Laravel javobi:
+```json
 {
-    public function __construct(public string $message) {}
-
-    public function broadcastOn(): array
-    {
-        return [new Channel('chat')];
-    }
+  "token": "guest:1780378499:dcd1ae409bed76c7...",
+  "channel": "chat"
 }
 ```
 
-### Redis kanal nomi
+### 2. Brauzer WebSocket ulanishini ochadi
 
-Laravel Redis prefix qo'shadi: `{APP_NAME}-database-{channel}`
+```javascript
+const { token, channel } = await fetch('/ws-token').then(r => r.json());
 
+const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}&channel=${channel}`);
+
+ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    console.log(data.event);  // "App\Events\MessageSent"
+    console.log(data.data);   // { message: "Salom!" }
+};
 ```
-laravel-database-chat
-```
 
-### Event dispatch qilish
+### 3. Laravel event yuboradi
 
 ```php
-// Yerda dispatch
 broadcast(new MessageSent('Salom!'));
-
 // yoki
 MessageSent::dispatch('Salom!');
 ```
 
-Demo uchun `GET /` route event dispatch qiladi.
-
-### Redis da tekshirish
-
-```bash
-# Terminal 1 — subscribe
-redis-cli subscribe laravel-database-chat
-
-# Terminal 2 — event trigger
-curl http://localhost:8000
-```
-
-Terminal 1 da shu ko'rinishdagi natija keladi:
+### 4. Brauzer xabarni oladi
 
 ```json
 {
   "event": "App\\Events\\MessageSent",
   "data": {
-    "message": "Hello, world!",
+    "message": "Salom!",
     "socket": null
-  },
-  "socket": null
+  }
 }
 ```
 
 ---
 
-## Go WebSocket Server
+## Redis kanal nomi
 
-Go server quyidagi vazifalarni bajaradi:
-
-1. `laravel-database-{channel}` ga Redis subscribe
-2. WebSocket orqali brauzer ulanishlarini qabul qilish
-3. Redis dan kelgan xabarni barcha ulangan brauzerlarga yuborish
-
-### Kerakli paketlar
+Laravel `REDIS_PREFIX` + channel nomini birlashtiradi:
 
 ```
-go-redis/redis/v9      — Redis client
-gorilla/websocket      — WebSocket server
+REDIS_PREFIX=broadcast_redis
+channel=chat
+
+→ Redis kanal: "broadcast_redischat"
 ```
 
----
-
-## Frontend (Laravel Echo)
-
-`resources/js/echo.js` — Laravel Echo sozlamasi. Hozirda `reverb` broadcaster ishlatilgan. Go server tayyor bo'lgach `broadcaster: 'reverb'` o'rniga `broadcaster: 'socket.io'` yoki oddiy WebSocket ga o'zgartirish kerak.
-
-```js
-window.Echo.channel('chat').listen('MessageSent', (e) => {
-    console.log(e.message);
-});
-```
+Go server ham xuddi shu prefixni ishlatadi — `broadcast_redis*` patterniga subscribe bo'ladi.
 
 ---
 
 ## Loyiha tuzilmasi
 
 ```
-app/Events/
-    MessageSent.php       — Broadcast event
-config/
-    broadcasting.php      — Redis connection sozlamasi
-    reverb.php            — Reverb config (zaxira)
-routes/
-    channels.php          — Broadcast channel auth
-    web.php               — Demo route
-resources/js/
-    echo.js               — Laravel Echo setup
-    app.js                — JS entry point
+├── app/Events/
+│   └── MessageSent.php        — ShouldBroadcastNow event
+├── config/
+│   └── broadcasting.php       — redis driver sozlamasi
+├── routes/
+│   ├── web.php                — / (demo) va /ws-token endpoint
+│   └── channels.php           — broadcast channel auth
+├── ws-server/
+│   ├── main.go                — HTTP/WebSocket server, Redis subscriber
+│   ├── hub.go                 — ulanishlarni channel bo'yicha boshqaradi
+│   ├── auth.go                — HMAC token validatsiyasi
+│   ├── go.mod
+│   └── .env.example
+└── resources/js/
+    └── echo.js                — Laravel Echo sozlamasi
 ```
+
+---
+
+## Production uchun eslatmalar
+
+- `/ws-token` routega `->middleware('auth')` qo'shing — faqat tizimga kirgan foydalanuvchilar token olsin
+- `WS_SECRET` ni kamida 32 belgili tasodifiy qator qiling
+- `ALLOWED_ORIGINS` ni aniq domenga sozlang (hozir `http://localhost:8000`)
+- Go serverni `systemd` yoki `supervisor` orqali ishga tushiring
+- WebSocket uchun `wss://` (TLS) ishlatish tavsiya etiladi
 
 ---
 

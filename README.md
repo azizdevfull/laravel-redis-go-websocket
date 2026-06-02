@@ -177,9 +177,9 @@ redis subscriber ready  pattern=broadcast_redis_*
 | Endpoint | Auth | Kimga | Channel cheklov |
 |---|---|---|---|
 | `GET /api/ws-token?channel=chat` | Sanctum token | Login qilgan user | Istalgan channel |
-| `GET /api/ws-token/guest?channel=public-chat` | Yo'q (60 req/min) | Ochiq sahifalar | Faqat `public-*` |
+| `GET /api/ws-token/guest?channel=chat` | Yo'q (60 req/min) | Ochiq sahifalar | `private-*` dan tashqari |
 
-Guest `public-*` dan boshqa channel so'rasa **403** qaytadi.
+Guest `private-*` channel so'rasa **403** qaytadi.
 
 ---
 

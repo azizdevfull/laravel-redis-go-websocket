@@ -20,10 +20,10 @@ Route::get('/ws-token', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::get('/ws-token/guest', function (Request $request) {
-    $channel = $request->query('channel', 'public-chat');
+    $channel = $request->query('channel', 'chat');
 
-    if (! str_starts_with($channel, 'public-')) {
-        return response()->json(['error' => 'guests can only access public-* channels'], 403);
+    if (str_starts_with($channel, 'private-')) {
+        return response()->json(['error' => 'guests cannot access private channels'], 403);
     }
 
     $userId = 'guest';

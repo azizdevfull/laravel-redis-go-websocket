@@ -321,6 +321,66 @@ MAX_CONNECTIONS=50000
 - WebSocket uchun `wss://` (TLS) ishlatish tavsiya etiladi
 - Horizontal scale: bir nechta Go instance, hammasi bir Redis ga — ishlaydi
 
+### Nginx + subdomain sozlash
+
+`ws.loyiha.uz` kabi subdomain orqali portni yashirish va SSL qo'shish:
+
+```nginx
+upstream ws_backend {
+    server localhost:8080;
+    server localhost:8081;
+    server localhost:8082;
+}
+
+server {
+    listen 80;
+    server_name ws.loyiha.uz;
+
+    location / {
+        proxy_pass http://ws_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+SSL sertifikat (Let's Encrypt):
+
+```bash
+certbot --nginx -d ws.loyiha.uz
+```
+
+Brauzerda port ko'rsatish shart emas:
+
+```javascript
+const ws = new WebSocket('wss://ws.loyiha.uz/ws?token=...&channel=...');
+```
+
+> **Muhim:** `proxy_http_version 1.1` va `Upgrade` headerlari bo'lmasa WebSocket ishlamaydi — oddiy HTTP bo'lib qoladi.
+
+### Horizontal scaling
+
+Har Go instance bir Redis ga subscribe bo'ladi — message hammaga keladi:
+
+```
+                ┌─ Go instance 1 (:8080) ─┐
+                │                          │
+Redis pub/sub ──┼─ Go instance 2 (:8081) ─┼──── Brauzerlar
+                │                          │
+                └─ Go instance 3 (:8082) ─┘
+```
+
+```bash
+PORT=8080 go run . &
+PORT=8081 go run . &
+PORT=8082 go run . &
+```
+
+Har instance ~10k ulanish → 3 instance = ~30k. Kerak bo'lsa yana qo'shiladi.
+
 ---
 
 ## Litsenziya

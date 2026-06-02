@@ -108,7 +108,7 @@ REDIS_CLIENT=phpredis
 REDIS_HOST=127.0.0.1
 REDIS_PASSWORD=null
 REDIS_PORT=6379
-REDIS_PREFIX=broadcast_redis
+REDIS_PREFIX=broadcast_redis_
 
 # Go server bilan umumiy sir — ikki tomonda bir xil bo'lishi shart
 WS_SECRET=your-strong-random-secret
@@ -159,7 +159,7 @@ composer run dev
 ```bash
 cd ws-server
 WS_SECRET=your-strong-random-secret \
-REDIS_PREFIX=broadcast_redis \
+REDIS_PREFIX=broadcast_redis_ \
 go run .
 ```
 
@@ -167,7 +167,7 @@ Muvaffaqiyatli ishga tushsa:
 ```
 redis connected
 WebSocket server listening on :8080
-redis subscriber ready  pattern=broadcast_redis*
+redis subscriber ready  pattern=broadcast_redis_*
 ```
 
 ---
@@ -249,13 +249,13 @@ MessageSent::dispatch('Salom!');
 Laravel `REDIS_PREFIX` + channel nomini birlashtiradi:
 
 ```
-REDIS_PREFIX=broadcast_redis
+REDIS_PREFIX=broadcast_redis_
 channel=chat
 
-→ Redis kanal: "broadcast_redischat"
+→ Redis kanal: "broadcast_redis_chat"
 ```
 
-Go server ham xuddi shu prefixni ishlatadi — `broadcast_redis*` patterniga subscribe bo'ladi.
+Go server ham xuddi shu prefixni ishlatadi — `broadcast_redis_*` patterniga subscribe bo'ladi.
 
 ---
 

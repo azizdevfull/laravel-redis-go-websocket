@@ -2,6 +2,7 @@
 
 use App\Events\MessageSent;
 use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use League\CommonMark\CommonMarkConverter;
@@ -22,13 +23,14 @@ Route::get('/auth', function () {
 });
 
 // Token endpoint — add auth middleware in production: ->middleware('auth')
-Route::get('/ws-token', function () {
-    $userId = (string) (auth()->id() ?? 'guest');
+Route::get('/ws-token', function (Request $request) {
+    $channel = $request->query('channel', 'chat');
+    $userId = (string) $request->user()->id;
     $timestamp = (string) time();
-    $signature = hash_hmac('sha256', $userId.':'.$timestamp, env('WS_SECRET'));
+    $signature = hash_hmac('sha256', $userId . ':' . $timestamp . ':' . $channel, env('WS_SECRET'));
 
     return response()->json([
-        'token' => $userId.':'.$timestamp.':'.$signature,
-        'channel' => 'chat',
+        'token' => $userId . ':' . $timestamp . ':' . $channel . ':' . $signature,
+        'channel' => $channel,
     ]);
-});
+})->middleware('auth');
